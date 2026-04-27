@@ -188,10 +188,10 @@ impl PersistFile {
 
     /// Saves the PersistFile to disk.
     /// Format is determined by file extension (.ron for RON, .json for JSON).
-    pub fn save_to_file(
+    pub fn save_to_file<S: Storage>(
         &mut self,
         path: impl AsRef<Path>,
-        storage: &dyn Storage,
+        storage: &S,
     ) -> PersistResult<()> {
         let path = path.as_ref();
 
@@ -313,9 +313,9 @@ pub struct PersistManager {
     secret: Option<String>,
     /// Storage backend (filesystem or browser storage)
     #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
-    storage: WasmStorage,
+    pub storage: WasmStorage,
     #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
-    storage: FileSystemStorage,
+    pub storage: FileSystemStorage,
 }
 
 impl PersistManager {
@@ -546,7 +546,7 @@ impl PersistManager {
                 "{}_dev.ron",
                 self.app_name.to_lowercase().replace(" ", "_")
             ));
-            self.persist_file = PersistFile::load_from_file(&fallback_path, self.storage.as_ref())?;
+            self.persist_file = PersistFile::load_from_file(&fallback_path, &self.storage)?;
             Ok(())
         }
     }
@@ -923,7 +923,7 @@ pub fn persist_system<T: Persistable>(mut manager: ResMut<PersistManager>, resou
                             // TODO: Add encryption/obfuscation
                         }
 
-                        if let Err(e) = file.save_to_file(&path) {
+                        if let Err(e) = file.save_to_file(&path, &manager.storage) {
                             error!("Failed to save {} to {:?}: {}", type_name, path, e);
                         } else {
                             debug!("Saved {} to {:?}", type_name, path);
@@ -1031,7 +1031,7 @@ pub fn load_persisted<T: Persistable>(manager: Res<PersistManager>, mut resource
     if mode == PersistMode::Dynamic || mode == PersistMode::Secure {
         let path = manager.get_resource_path(type_name, mode);
         if !path.as_os_str().is_empty() && path.exists() {
-            if let Ok(file) = PersistFile::load_from_file(&path) {
+            if let Ok(file) = PersistFile::load_from_file(&path, &manager.storage) {
                 if let Some(data) = file.get_type_data(type_name) {
                     resource.load_from_persist_data(data);
                     info!(

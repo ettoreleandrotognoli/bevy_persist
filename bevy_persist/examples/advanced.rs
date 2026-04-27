@@ -258,7 +258,7 @@ fn game_loop(
                     let mut file = PersistFile::new();
                     file.set_type_data("PlayerProgress".to_string(), data);
 
-                    if let Err(e) = file.save_to_file(&path) {
+                    if let Err(e) = file.save_to_file(&path, &manager.storage) {
                         println!("❌ Failed to save progress: {}", e);
                     } else {
                         println!("✅ Progress saved to secure location: {:?}", path);
