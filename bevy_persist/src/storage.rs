@@ -27,24 +27,24 @@ pub trait Storage: Send + Sync {
     fn create_dir(&self, path: &str) -> PersistResult<()>;
 }
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 mod filesystem;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 pub use filesystem::FileSystemStorage;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 pub fn create_storage() -> FileSystemStorage {
     FileSystemStorage::new()
 }
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 mod wasm_storage;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use wasm_storage::WasmStorage;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub fn create_storage() -> WasmStorage {
     WasmStorage::new()
 }

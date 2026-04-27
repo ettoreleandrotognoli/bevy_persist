@@ -58,10 +58,10 @@ pub use bevy_persist_derive::Persist;
 // For auto-registration
 pub use inventory;
 
-#[cfg(feature = "wasm")]
+#[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 use crate::storage::WasmStorage;
 
-#[cfg(not(feature = "wasm"))]
+#[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
 use crate::storage::FileSystemStorage;
 
 pub mod prelude {
@@ -164,7 +164,7 @@ impl PersistFile {
 
     /// Loads a PersistFile from disk. Creates a new one if the file doesn't exist.
     /// Automatically detects format based on file extension (.ron or .json).
-    pub fn load_from_file(path: impl AsRef<Path>, storage: &dyn Storage) -> PersistResult<Self> {
+    pub fn load_from_file<S: Storage>(path: impl AsRef<Path>, storage: &S) -> PersistResult<Self> {
         let path = path.as_ref();
 
         if !storage.exists(path.to_str().unwrap_or("")) {
@@ -312,9 +312,9 @@ pub struct PersistManager {
     #[cfg(feature = "secure")]
     secret: Option<String>,
     /// Storage backend (filesystem or browser storage)
-    #[cfg(feature = "wasm")]
+    #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
     storage: WasmStorage,
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
     storage: FileSystemStorage,
 }
 
@@ -1092,7 +1092,6 @@ pub fn load_persisted<T: Persistable>(manager: Res<PersistManager>, mut resource
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -1335,13 +1334,13 @@ mod tests {
         assert!(data.values.is_empty());
     }
 
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]
     #[test]
     fn test_persist_file_format_detection() {
         use storage::FileSystemStorage;
 
         let temp_dir = TempDir::new().unwrap();
-        let storage: Box<dyn Storage> = Box::new(FileSystemStorage::new());
+        let storage = FileSystemStorage::new();
 
         // Test JSON format
         let json_path = temp_dir.path().join("test.json");
@@ -1350,7 +1349,7 @@ mod tests {
         data.insert("test_key", "test_value");
         json_file.set_type_data("TestType".to_string(), data.clone());
         json_file
-            .save_to_file(&json_path, storage.as_ref())
+            .save_to_file(&json_path, &storage)
             .unwrap();
         let content = storage.read(json_path.to_str().unwrap()).unwrap().unwrap();
         assert!(content.starts_with('{'), "JSON should start with {{");
@@ -1363,12 +1362,12 @@ mod tests {
         let ron_path = temp_dir.path().join("test.ron");
         let mut ron_file = PersistFile::new();
         ron_file.set_type_data("TestType".to_string(), data);
-        ron_file.save_to_file(&ron_path, storage.as_ref()).unwrap();
+        ron_file.save_to_file(&ron_path, &storage).unwrap();
 
         // RON and JSON will have different formatting
         // Just verify both can be loaded back correctly
-        let loaded_json = PersistFile::load_from_file(&json_path, storage.as_ref()).unwrap();
-        let loaded_ron = PersistFile::load_from_file(&ron_path, storage.as_ref()).unwrap();
+        let loaded_json = PersistFile::load_from_file(&json_path, &storage).unwrap();
+        let loaded_ron = PersistFile::load_from_file(&ron_path, &storage).unwrap();
 
         assert!(loaded_json.get_type_data("TestType").is_some());
         assert!(loaded_ron.get_type_data("TestType").is_some());

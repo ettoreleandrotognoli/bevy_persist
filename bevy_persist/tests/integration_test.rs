@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_persist::{prelude::*, storage::{self, create_storage}};
+use bevy_persist::{prelude::*, storage::create_storage};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 
