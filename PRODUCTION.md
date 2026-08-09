@@ -73,6 +73,7 @@ struct UserSettings {
 - **Windows**: `%APPDATA%\YourCompany\YourGame\usersettings.ron`
 - **macOS**: `~/Library/Application Support/YourCompany/YourGame/usersettings.ron`
 - **Linux**: `~/.config/YourCompany/YourGame/usersettings.ron`
+- **Android**: `filesDir/config/YourCompany/YourGame/usersettings.ron`
 
 ### 3. Secure Mode - Protected Save Data
 Use for save games, player progress, achievements, etc.
@@ -91,6 +92,7 @@ struct SaveGame {
 - **Windows**: `%LOCALAPPDATA%\YourCompany\YourGame\savegame.dat`
 - **macOS**: `~/Library/Application Support/YourCompany/YourGame/savegame.dat`
 - **Linux**: `~/.local/share/YourCompany/YourGame/savegame.dat`
+- **Android**: `filesDir/data/YourCompany/YourGame/savegame.dat`
 
 **Security features** (when `secure` feature enabled):
 - TODO: Basic obfuscation to discourage casual editing

@@ -10,6 +10,7 @@
 //! - **Change Detection**: Only saves when resources actually change, minimizing disk I/O
 //! - **Derive Macro**: Simple `#[derive(Persist)]` to make any resource persistent
 //! - **Flexible Configuration**: Customize save paths, formats, and save strategies per resource
+//! - **Cross-Platform Storage**: Native filesystem persistence on desktop and Android, browser storage on WASM
 //!
 //! # Quick Start
 //!
@@ -33,7 +34,8 @@
 //! }
 //! ```
 
-use bevy::{ecs::component::Mutable, prelude::*};
+use bevy_app::prelude::*;
+use bevy_ecs::{component::Mutable, prelude::*};
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -254,7 +256,9 @@ pub enum PersistMode {
 ///
 /// Persisted resources must remain mutable in Bevy 0.19 because loading data at startup
 /// requires mutable resource access.
-pub trait Persistable: Resource<Mutability = Mutable> + Serialize + for<'de> Deserialize<'de> {
+pub trait Persistable:
+    Resource<Mutability = Mutable> + Serialize + for<'de> Deserialize<'de>
+{
     /// Get the type name for persistence
     fn type_name() -> &'static str;
 
@@ -330,10 +334,10 @@ impl PersistManager {
 
         // In dev mode, load from the dev file if it exists
         #[cfg(not(feature = "prod"))]
-        let dev_file = PathBuf::from(format!(
-            "{}_dev.ron",
-            app_name.to_lowercase().replace(" ", "_")
-        ));
+        let dev_file = Self::default_dev_file_path(&organization, &app_name).unwrap_or_else(|e| {
+            error!("Failed to resolve Android dev persistence path: {}", e);
+            PathBuf::new()
+        });
 
         #[cfg(not(feature = "prod"))]
         let persist_file = PersistFile::load_from_file(&dev_file, &storage).unwrap_or_else(|e| {
@@ -464,48 +468,14 @@ impl PersistManager {
     pub fn get_resource_path(&self, type_name: &str, mode: PersistMode) -> PathBuf {
         #[cfg(feature = "prod")]
         {
-            match mode {
-                PersistMode::Dev => {
-                    // In production, dev mode resources shouldn't exist
-                    // But if they do, save to a local file as fallback
-                    PathBuf::from(format!(
-                        "{}_dev.ron",
-                        self.app_name.to_lowercase().replace(" ", "_")
-                    ))
-                }
-                PersistMode::Dynamic => {
-                    if let Some(proj_dirs) =
-                        ProjectDirs::from("", &self.organization, &self.app_name)
-                    {
-                        let config_dir = proj_dirs.config_dir();
-                        self.storage
-                            .create_dir(config_dir.to_str().unwrap_or(""))
-                            .ok();
-                        config_dir.join(format!("{}.ron", type_name.to_lowercase()))
-                    } else {
-                        // Fallback to current directory if platform dirs unavailable
-                        PathBuf::from(format!("{}.ron", type_name.to_lowercase()))
-                    }
-                }
-                PersistMode::Secure => {
-                    if let Some(proj_dirs) =
-                        ProjectDirs::from("", &self.organization, &self.app_name)
-                    {
-                        let data_dir = proj_dirs.data_dir();
-                        self.storage
-                            .create_dir(data_dir.to_str().unwrap_or(""))
-                            .ok();
-                        data_dir.join(format!("{}.dat", type_name.to_lowercase()))
-                    } else {
-                        // Fallback to current directory if platform dirs unavailable
-                        PathBuf::from(format!("{}.dat", type_name.to_lowercase()))
-                    }
-                }
-                PersistMode::Embed => {
-                    // Embedded resources don't save to disk in prod
+            self.try_get_resource_path(type_name, mode)
+                .unwrap_or_else(|e| {
+                    error!(
+                        "Failed to resolve persistence path for {} ({:?}): {}",
+                        type_name, mode, e
+                    );
                     PathBuf::new()
-                }
-            }
+                })
         }
         #[cfg(not(feature = "prod"))]
         {
@@ -513,6 +483,140 @@ impl PersistManager {
             let _ = (type_name, mode); // Suppress warnings
             self.dev_file.clone()
         }
+    }
+
+    #[cfg(feature = "prod")]
+    fn try_get_resource_path(&self, type_name: &str, mode: PersistMode) -> PersistResult<PathBuf> {
+        match mode {
+            PersistMode::Dev => Ok(PathBuf::from(format!(
+                "{}_dev.ron",
+                self.app_name.to_lowercase().replace(" ", "_")
+            ))),
+            PersistMode::Dynamic => {
+                let file_name = prod_resource_file_name(type_name, mode)
+                    .expect("dynamic resources should always have a file name");
+
+                #[cfg(target_os = "android")]
+                {
+                    return Ok(android_resource_path_from_base(
+                        &Self::android_internal_data_dir()?,
+                        &self.organization,
+                        &self.app_name,
+                        "config",
+                        &file_name,
+                    ));
+                }
+
+                #[cfg(not(target_os = "android"))]
+                {
+                    if let Some(proj_dirs) =
+                        ProjectDirs::from("", &self.organization, &self.app_name)
+                    {
+                        return Ok(proj_dirs.config_dir().join(file_name));
+                    }
+                }
+
+                Ok(PathBuf::from(file_name))
+            }
+            PersistMode::Secure => {
+                let file_name = prod_resource_file_name(type_name, mode)
+                    .expect("secure resources should always have a file name");
+
+                #[cfg(target_os = "android")]
+                {
+                    return Ok(android_resource_path_from_base(
+                        &Self::android_internal_data_dir()?,
+                        &self.organization,
+                        &self.app_name,
+                        "data",
+                        &file_name,
+                    ));
+                }
+
+                #[cfg(not(target_os = "android"))]
+                {
+                    if let Some(proj_dirs) =
+                        ProjectDirs::from("", &self.organization, &self.app_name)
+                    {
+                        return Ok(proj_dirs.data_dir().join(file_name));
+                    }
+                }
+
+                Ok(PathBuf::from(file_name))
+            }
+            PersistMode::Embed => Ok(PathBuf::new()),
+        }
+    }
+
+    #[cfg(not(feature = "prod"))]
+    fn default_dev_file_path(organization: &str, app_name: &str) -> PersistResult<PathBuf> {
+        let file_name = format!("{}_dev.ron", app_name.to_lowercase().replace(" ", "_"));
+
+        #[cfg(target_os = "android")]
+        {
+            return Ok(android_resource_path_from_base(
+                &Self::android_internal_data_dir()?,
+                organization,
+                app_name,
+                "dev",
+                &file_name,
+            ));
+        }
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = organization;
+            Ok(PathBuf::from(file_name))
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    fn android_internal_data_dir() -> PersistResult<PathBuf> {
+        let android_context =
+            std::panic::catch_unwind(ndk_context::android_context).map_err(|_| {
+                PersistError::IoError(
+                    "Android context unavailable: ndk_context is not initialized".to_string(),
+                )
+            })?;
+
+        let java_vm = unsafe { jni::JavaVM::from_raw(android_context.vm().cast()) };
+
+        java_vm
+            .attach_current_thread(|env| -> jni::errors::Result<PathBuf> {
+                let context = unsafe {
+                    jni::objects::JObject::from_raw(env, android_context.context().cast())
+                };
+
+                let files_dir = env
+                    .call_method(
+                        context,
+                        jni::jni_str!("getFilesDir"),
+                        jni::jni_sig!("()Ljava/io/File;"),
+                        &[],
+                    )
+                    .and_then(|value| value.l())?;
+
+                let files_dir_path = env
+                    .call_method(
+                        files_dir,
+                        jni::jni_str!("getAbsolutePath"),
+                        jni::jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )
+                    .and_then(|value| value.l())?;
+
+                let files_dir_path = unsafe {
+                    jni::objects::JString::from_raw(env, files_dir_path.into_raw().cast())
+                };
+
+                files_dir_path.try_to_string(env).map(PathBuf::from)
+            })
+            .map_err(|e| {
+                PersistError::IoError(format!(
+                    "Failed to resolve Android filesDir through JNI: {}",
+                    e
+                ))
+            })
     }
 
     /// Saves all persistent data to the file.
@@ -628,7 +732,7 @@ impl PersistManager {
                     };
 
                     // Write to .dat file
-                    let path = self.get_resource_path(type_name, mode);
+                    let path = self.try_get_resource_path(type_name, mode)?;
                     let path_str = path.to_str().unwrap_or("");
                     self.storage
                         .write_bytes(path_str, &final_data)
@@ -649,7 +753,7 @@ impl PersistManager {
             }
             _ => {
                 // Dynamic and Dev modes save as RON
-                let path = self.get_resource_path(type_name, mode);
+                let path = self.try_get_resource_path(type_name, mode)?;
                 let ron_string =
                     ron::ser::to_string_pretty(data, ron::ser::PrettyConfig::default())
                         .map_err(|e| PersistError::SerializationError(e.to_string()))?;
@@ -682,7 +786,7 @@ impl PersistManager {
             PersistMode::Secure => {
                 #[cfg(feature = "secure")]
                 {
-                    let path = self.get_resource_path(type_name, mode);
+                    let path = self.try_get_resource_path(type_name, mode)?;
                     let path_str = path.to_str().unwrap_or("");
                     let stored = self
                         .storage
@@ -735,7 +839,7 @@ impl PersistManager {
             }
             _ => {
                 // Dynamic and Dev modes load as RON
-                let path = self.get_resource_path(type_name, mode);
+                let path = self.try_get_resource_path(type_name, mode)?;
                 let path_str = path.to_str().unwrap_or("");
                 let contents = self
                     .storage
@@ -924,7 +1028,16 @@ pub fn persist_system<T: Persistable>(mut manager: ResMut<PersistManager>, resou
             #[cfg(feature = "prod")]
             {
                 if mode == PersistMode::Dynamic || mode == PersistMode::Secure {
-                    let path = manager.get_resource_path(type_name, mode);
+                    let path = match manager.try_get_resource_path(type_name, mode) {
+                        Ok(path) => path,
+                        Err(e) => {
+                            error!(
+                                "Failed to resolve persistence path for {} ({:?}): {}",
+                                type_name, mode, e
+                            );
+                            return;
+                        }
+                    };
                     if !path.as_os_str().is_empty() {
                         let mut file = PersistFile::new();
                         file.set_type_data(type_name.to_string(), data);
@@ -951,22 +1064,17 @@ pub fn persist_system<T: Persistable>(mut manager: ResMut<PersistManager>, resou
             // In dev mode, if this resource will be embedded in prod, also save it to a separate file
             #[cfg(not(feature = "prod"))]
             if mode == PersistMode::Embed {
-                // For embed resources in dev mode, save to assets/persist/ directory
-                // This follows Bevy conventions and makes files easy to find
-
-                // Use environment variable if set, otherwise use default relative path
-                // Users can set BEVY_ASSET_ROOT or CARGO_MANIFEST_DIR for custom paths
-                let base_path = std::env::var("BEVY_ASSET_ROOT")
-                    .or_else(|_| std::env::var("CARGO_MANIFEST_DIR"))
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("."));
+                let base_path = match dev_embed_base_path() {
+                    Ok(path) => path,
+                    Err(e) => {
+                        error!("Failed to resolve dev embed path for {}: {}", type_name, e);
+                        return;
+                    }
+                };
 
                 let embed_file_name =
                     format!("{}.ron", type_name.to_lowercase().replace("::", "_"));
-                let embed_path = base_path
-                    .join("assets")
-                    .join("persist")
-                    .join(embed_file_name);
+                let embed_path = base_path.join(embed_file_name);
 
                 // Create the persist directory if it doesn't exist
                 if let Some(parent) = embed_path.parent() {
@@ -1041,7 +1149,16 @@ pub fn load_persisted<T: Persistable>(manager: Res<PersistManager>, mut resource
     // Load from disk for dynamic/secure modes in production
     #[cfg(feature = "prod")]
     if mode == PersistMode::Dynamic || mode == PersistMode::Secure {
-        let path = manager.get_resource_path(type_name, mode);
+        let path = match manager.try_get_resource_path(type_name, mode) {
+            Ok(path) => path,
+            Err(e) => {
+                error!(
+                    "Failed to resolve persistence path for {} ({:?}): {}",
+                    type_name, mode, e
+                );
+                return;
+            }
+        };
         if !path.as_os_str().is_empty() && path.exists() {
             if let Ok(file) = PersistFile::load_from_file(&path, &manager.storage) {
                 if let Some(data) = file.get_type_data(type_name) {
@@ -1065,17 +1182,16 @@ pub fn load_persisted<T: Persistable>(manager: Res<PersistManager>, mut resource
     // In dev mode, check if this is an embed resource and try to load from its file
     #[cfg(not(feature = "prod"))]
     if mode == PersistMode::Embed {
-        // Use environment variable if set, otherwise use default relative path
-        let base_path = std::env::var("BEVY_ASSET_ROOT")
-            .or_else(|_| std::env::var("CARGO_MANIFEST_DIR"))
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("."));
+        let base_path = match dev_embed_base_path() {
+            Ok(path) => path,
+            Err(e) => {
+                error!("Failed to resolve dev embed path for {}: {}", type_name, e);
+                return;
+            }
+        };
 
         let embed_file_name = format!("{}.ron", type_name.to_lowercase().replace("::", "_"));
-        let embed_path = base_path
-            .join("assets")
-            .join("persist")
-            .join(embed_file_name);
+        let embed_path = base_path.join(embed_file_name);
 
         if embed_path.exists() {
             // Load from the embed file if it exists
@@ -1099,6 +1215,53 @@ pub fn load_persisted<T: Persistable>(manager: Res<PersistManager>, mut resource
         resource.load_from_persist_data(data);
         info!("Loaded persisted data for {}", type_name);
     }
+}
+
+#[cfg(not(feature = "prod"))]
+fn dev_embed_base_path() -> PersistResult<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        return Ok(PersistManager::android_internal_data_dir()?
+            .join("assets")
+            .join("persist"));
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(std::env::var("BEVY_ASSET_ROOT")
+            .or_else(|_| std::env::var("CARGO_MANIFEST_DIR"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("assets")
+            .join("persist"))
+    }
+}
+
+#[cfg(any(feature = "prod", test))]
+fn prod_resource_file_name(type_name: &str, mode: PersistMode) -> Option<String> {
+    match mode {
+        PersistMode::Dynamic => Some(format!("{}.ron", type_name.to_lowercase())),
+        PersistMode::Secure => Some(format!("{}.dat", type_name.to_lowercase())),
+        PersistMode::Dev | PersistMode::Embed => None,
+    }
+}
+
+#[cfg(any(target_os = "android", test))]
+fn android_resource_path_from_base(
+    base_dir: &Path,
+    organization: &str,
+    app_name: &str,
+    category: &str,
+    file_name: &str,
+) -> PathBuf {
+    let mut path = base_dir.join(category);
+    if !organization.is_empty() {
+        path.push(organization);
+    }
+    if !app_name.is_empty() {
+        path.push(app_name);
+    }
+    path.join(file_name)
 }
 
 #[cfg(test)]
@@ -1344,6 +1507,46 @@ mod tests {
     fn test_persist_data_default() {
         let data = PersistData::default();
         assert!(data.values.is_empty());
+    }
+
+    #[test]
+    fn test_prod_resource_file_name() {
+        assert_eq!(
+            prod_resource_file_name("UserSettings", PersistMode::Dynamic),
+            Some("usersettings.ron".to_string())
+        );
+        assert_eq!(
+            prod_resource_file_name("SaveGame", PersistMode::Secure),
+            Some("savegame.dat".to_string())
+        );
+        assert_eq!(prod_resource_file_name("DevOnly", PersistMode::Dev), None);
+        assert_eq!(
+            prod_resource_file_name("Embedded", PersistMode::Embed),
+            None
+        );
+    }
+
+    #[test]
+    fn test_android_resource_path_from_base() {
+        let base = Path::new("/data/user/0/com.example.game/files");
+
+        assert_eq!(
+            android_resource_path_from_base(
+                base,
+                "TestOrg",
+                "TestApp",
+                "config",
+                "usersettings.ron"
+            ),
+            PathBuf::from(
+                "/data/user/0/com.example.game/files/config/TestOrg/TestApp/usersettings.ron"
+            )
+        );
+
+        assert_eq!(
+            android_resource_path_from_base(base, "", "TestApp", "data", "savegame.dat"),
+            PathBuf::from("/data/user/0/com.example.game/files/data/TestApp/savegame.dat")
+        );
     }
 
     #[cfg(not(all(feature = "wasm", target_arch = "wasm32")))]

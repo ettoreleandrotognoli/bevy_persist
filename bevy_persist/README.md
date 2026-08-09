@@ -9,6 +9,7 @@ Automatic persistence for Bevy resources with change detection.
 - **Change Detection**: Only saves when resources actually change, minimizing disk I/O
 - **Derive Macro**: Simple `#[derive(Persist)]` to make any resource persistent
 - **Flexible Configuration**: Customize save paths, formats, and save strategies per resource
+- **Platform Support**: Native filesystem storage on desktop and Android, browser storage on WASM
 
 ## Installation
 

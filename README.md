@@ -10,7 +10,7 @@ Automatic persistence for Bevy resources with change detection.
 - **Derive Macro**: Simple `#[derive(Persist)]` to make any resource persistent
 - **Flexible Configuration**: Customize save paths, formats, and save strategies per resource
 - **Production Ready**: Different persistence modes for development vs production
-- **Platform Support**: Automatic platform-specific paths for user data
+- **Platform Support**: Automatic platform-specific paths for user data, including Android internal storage
 - **Embedded Resources**: Compile tweaked values directly into your binary
 - **Encryption Support**: Optional AES-256-GCM encryption for secure save data
 

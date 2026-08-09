@@ -1,10 +1,10 @@
-//! Filesystem-based storage implementation for desktop platforms.
+//! Filesystem-based storage implementation for native platforms.
 
 use crate::{PersistError, PersistResult, Storage};
 use std::fs;
 use std::path::Path;
 
-/// Storage implementation that uses the filesystem (desktop platforms).
+/// Storage implementation that uses the filesystem on native platforms.
 pub struct FileSystemStorage;
 
 impl FileSystemStorage {

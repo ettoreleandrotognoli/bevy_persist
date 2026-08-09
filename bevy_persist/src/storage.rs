@@ -1,7 +1,7 @@
 //! Storage abstraction for persistence.
 //!
 //! This module provides a trait-based abstraction over different storage backends,
-//! allowing the same persistence logic to work on desktop (filesystem) and web
+//! allowing the same persistence logic to work on native (filesystem) and web
 //! (localStorage/IndexedDB) platforms.
 
 use crate::PersistResult;
